@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name		      YouTube Tweaks by MSerj
 // @icon          https://www.google.com/s2/favicons?sz=64&domain=youtube.com
-// @version		    2.0.0
-// @description   A configurable collection of YouTube layout and feed enhancements.
+// @version		    2.1.0
+// @description   A configurable collection of YouTube layout and feed enhancements, including no-scroll timestamp seeking.
 // @match         *://youtube.com/*
 // @match         *://www.youtube.com/*
 // @match         *://m.youtube.com/*
@@ -25,7 +25,7 @@
 
 ;(() => {
 	'use strict'
-
+	
 	const CONFIG = {
 		columns: 'ytd-items-per-row',
 		features: {
@@ -35,7 +35,7 @@
 			watched: 'yt-tweaks-watched'
 		}
 	}
-
+	
 	const selectors = {
 		shorts: [
 			'ytm-pivot-bar-item-renderer:has(.pivot-shorts)',
@@ -62,7 +62,7 @@
 		watched: ['ytd-rich-item-renderer:has(#progress[style="width: 100%;"])', 'ytd-compact-video-renderer:has(#progress[style="width: 100%;"])'],
 		mostRelevant: ['ytd-rich-section-renderer:has(ytd-rich-shelf-renderer)']
 	}
-
+	
 	const clampColumns = value => Math.min(10, Math.max(1, parseInt(value) || 5))
 	const state = {
 		columns: clampColumns(localStorage.getItem(CONFIG.columns))
@@ -73,11 +73,12 @@
 		{ id: 'watched', title: 'Hide watched videos', defaultValue: false, selectors: selectors.watched },
 		{ id: 'mostRelevant', title: 'Hide Most relevant', defaultValue: true, selectors: selectors.mostRelevant },
 		{ id: 'redirect', title: 'Redirect channel to /videos', defaultValue: true },
+		{ id: 'timestamps', title: 'No scroll to top on timestamps', defaultValue: true },
 		{ id: 'grid', title: 'Grid adjustment', defaultValue: true }
 	]
 	const style = document.createElement('style')
 	;(document.head || document.documentElement).appendChild(style)
-
+	
 	const excludedChannelPaths = ['/videos', '/community', '/live', '/playlists', '/search', '/podcasts', '/shorts', '/streams']
 	let isRedirecting = false
 	let lastCheckedPath = ''
@@ -96,7 +97,7 @@
 	const redirectObserver = new MutationObserver(redirectIfNeeded)
 	redirectObserver.observe(document, { subtree: true, childList: true })
 	redirectIfNeeded()
-
+	
 	const useOption = option => {
 		const ref = {
 			get value() {
@@ -109,14 +110,8 @@
 		return { ...option, ref }
 	}
 	const usedOptions = options.map(useOption)
-	const menuEntries = [
-		// { id: 'feed-section', title: '--- Feed filters ---', type: 'section' },
-		...usedOptions.slice(0, 4),
-		// { id: 'grid-section', title: '--- Grid adjustments ---', type: 'section' },
-		usedOptions[4],
-		usedOptions[5],
-		{ id: 'grid-columns', title: '🖥️ Set grid columns', type: 'columns' }
-	]
+	const optionById = id => usedOptions.find(option => option.id === id)
+	const menuEntries = [...usedOptions, { id: 'grid-columns', title: '🖥️ Set grid columns', type: 'columns' }]
 	const register = entry => {
 		if (entry.type === 'section') {
 			GM_registerMenuCommand(entry.title, () => {}, { id: entry.id, autoClose: false })
@@ -155,7 +150,7 @@
 		menuEntries.forEach(unregister)
 		menuEntries.forEach(register)
 		const rules = []
-		if (usedOptions[5].ref.value) {
+		if (optionById('grid').ref.value) {
 			rules.push(`
 				.style-scope.ytd-two-column-browse-results-renderer {
 					--ytd-rich-grid-items-per-row: ${state.columns} !important;
@@ -169,6 +164,47 @@
 			})
 		style.textContent = rules.join('\n')
 	}
-
+	
+	// Timestamps: seek in place instead of letting YouTube scroll the page to the top
+	const timestampToSeconds = text => {
+		const t = (text || '').trim()
+		if (!/^\d{1,2}(?::\d{1,2}){1,3}$/.test(t)) return null
+		return t
+			.split(':')
+			.reverse()
+			.reduce((total, part, i) => total + Number(part) * [1, 60, 3600, 86400][i], 0)
+	}
+	const seekTo = seconds => {
+		const player = document.getElementById('movie_player')
+		if (player && typeof player.seekTo === 'function') {
+			player.seekTo(seconds, true)
+			return
+		}
+		const video = document.querySelector('video')
+		if (video) video.currentTime = seconds
+	}
+	document.addEventListener(
+		'click',
+		e => {
+			if (!GM_getValue('timestamps', true) || !(e.target instanceof Element)) return
+			let seconds = null
+			const chapter = e.target.closest('a#endpoint')
+			if (chapter) {
+				// Chapter entries in the description / engagement panel
+				seconds = timestampToSeconds(chapter.querySelector('#details #time')?.textContent)
+			} else {
+				// Timestamp links in description or comments
+				const link = e.target.closest('a')
+				if (link) seconds = timestampToSeconds(link.textContent)
+			}
+			if (seconds === null) return
+			e.preventDefault()
+			e.stopPropagation()
+			e.stopImmediatePropagation()
+			seekTo(seconds)
+		},
+		{ capture: true }
+	)
+	
 	update()
 })()
